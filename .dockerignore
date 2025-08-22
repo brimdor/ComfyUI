@@ -1,0 +1,20 @@
+# Keep image lean and builds fast
+.git
+.gitignore
+.github/
+**/__pycache__/
+**/*.pyc
+
+# Large data (mount as volumes instead)
+models/
+input/
+output/
+
+# Local caches
+.cache/
+.huggingface/
+
+# OS/editor cruft
+.DS_Store
+.vscode/
+.idea/
