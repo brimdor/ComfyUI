@@ -51,13 +51,13 @@ RUN set -eux; \
     grep -v -E '^(torch|torchvision|torchaudio)(==|~=|>=|\s|$)' /app/requirements.txt > /tmp/requirements.no-torch.txt; \
     pip install -r /tmp/requirements.no-torch.txt
 
-# Copy the rest of the source
-COPY . /app
+# Create a non-root user for safety before copying the source so we can use --chown
+RUN useradd -m -u 1000 -s /bin/bash comfy
 
-# Create a non-root user for safety
-RUN useradd -m -u 1000 -s /bin/bash comfy \
-  && chown -R comfy:comfy /app
+# Copy the rest of the source and set ownership in one step to avoid expensive chown
+COPY --chown=comfy:comfy . /app
 
+# ...existing code...
 # Prepare common mount points
 VOLUME ["/app/models", "/app/input", "/app/output", "/home/comfy/.cache"]
 
@@ -71,10 +71,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=5 \
 USER comfy
 
 # Entry: pass extra args at docker run time to customize behavior
-# Common additions:
-#   --listen 0.0.0.0  --port 8188
-#   --preview-method auto|taesd
-#   --front-end-version Comfy-Org/ComfyUI_frontend@latest
+# ...existing code...
 ENTRYPOINT ["python", "-u", "/app/main.py"]
 CMD ["--listen", "0.0.0.0", "--port", "8188"]
 

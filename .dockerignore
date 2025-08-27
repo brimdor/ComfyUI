@@ -1,20 +1,26 @@
-# Keep image lean and builds fast
+# basics
 .git
 .gitignore
-.github/
-**/__pycache__/
-**/*.pyc
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
-# Large data (mount as volumes instead)
+# local envs & caches
+.env
+.venv/
+venv/
+.python-version
+home/
+node_modules/
 models/
 input/
 output/
+*.sqlite
+*.ckpt
+*.pth
+*.pt
 
-# Local caches
-.cache/
-.huggingface/
-
-# OS/editor cruft
-.DS_Store
-.vscode/
-.idea/
+# exclude alembic DB templates and other local-only files that break tar
+alembic_db/
+alembic_db/script.py.mako
