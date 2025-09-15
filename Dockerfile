@@ -1,80 +1,50 @@
-# ComfyUI Dockerfile (Python 3.12 on Debian bookworm-slim)
-# - Simpler base matching repo's Python 3.12 recommendation
-# - Defaults to NVIDIA GPU via PyTorch cu129 wheels; supports CPU fallback
-# - Uses non-root user and mounts for models/input/output
-# - Exposes port 8188 and binds to 0.0.0.0
-
+# Slim runtime image: defers pip installs to container start
 FROM python:3.12-slim-bookworm
 
-# ----- Build args to control PyTorch variant -----
-# Set TORCH_INDEX_URL="" to build a CPU-only image.
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu129
-# Change to nightly if desired (optional); when using nightly, prefer --index-url over --extra-index-url
-ARG TORCH_NIGHTLY=false
-
-# Disable interactive APT, speed up pip and logs unbuffered
 ENV DEBIAN_FRONTEND=noninteractive \
-  PIP_NO_CACHE_DIR=1 \
-  PYTHONUNBUFFERED=1
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONUNBUFFERED=1 \
+    TORCH_INDEX_URL=https://download.pytorch.org/whl/cu129 \
+    TORCH_NIGHTLY=false
 
-# ----- System deps -----
+# Minimal runtime libs; include git so comfy-cli (gitpython) can operate
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    ffmpeg \
-    libgl1 \
-    libglib2.0-0 \
-    libsndfile1 \
-    curl \
-    ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+            git libgl1 libglib2.0-0 libsndfile1 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip tooling
-RUN pip install --upgrade pip setuptools wheel
+# Install gosu so we can drop privileges in the entrypoint (small, widely used helper)
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends dirmngr gnupg ca-certificates wget; \
+    rm -rf /var/lib/apt/lists/*; \
+    export GOSU_VERSION="1.16"; \
+    dpkgArch="$(dpkg --print-architecture | awk -F- '{ print $NF }')"; \
+    wget -O /tmp/gosu "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-${dpkgArch}"; \
+    wget -O /tmp/gosu.asc "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-${dpkgArch}.asc"; \
+    install -m 0755 /tmp/gosu /usr/local/bin/gosu; \
+    rm -f /tmp/gosu /tmp/gosu.asc; \
+    gosu --version || true
 
 WORKDIR /app
 
-# Copy and pre-install PyTorch stack with the chosen variant first to avoid CPU fallback
-COPY requirements.txt /app/requirements.txt
-
-# Install torch/torchvision/torchaudio first with the right index, then the rest
-# We strip torch family from requirements to prevent pip from overriding our install.
-RUN set -eux; \
-    if [ -n "$TORCH_INDEX_URL" ]; then \
-        if [ "$TORCH_NIGHTLY" = "true" ]; then \
-            pip install --pre torch torchvision torchaudio --index-url "$TORCH_INDEX_URL"; \
-        else \
-            pip install torch torchvision torchaudio --extra-index-url "$TORCH_INDEX_URL"; \
-        fi; \
-    else \
-        pip install torch torchvision torchaudio; \
-    fi; \
-    grep -v -E '^(torch|torchvision|torchaudio)(==|~=|>=|\s|$)' /app/requirements.txt > /tmp/requirements.no-torch.txt; \
-    pip install -r /tmp/requirements.no-torch.txt
-
-# Create a non-root user for safety before copying the source so we can use --chown
+# Non-root user
 RUN useradd -m -u 1000 -s /bin/bash comfy
 
-# Copy the rest of the source and set ownership in one step to avoid expensive chown
+# Prepare workspace directories (workspace for ComfyUI and user-local pip dir)
+ENV WORKSPACE=/comfyui
+RUN mkdir -p /app /comfyui /home/comfy/.local /home/comfy/.cache \
+    && chown -R comfy:comfy /comfyui /home/comfy/.local /home/comfy/.cache /app
+
+# Copy application source and entrypoint (entrypoint will perform installs at runtime)
 COPY --chown=comfy:comfy . /app
+COPY --chown=comfy:comfy scripts/docker-entrypoint.sh /app/scripts/docker-entrypoint.sh
+RUN chmod +x /app/scripts/docker-entrypoint.sh
 
-# ...existing code...
-# Prepare common mount points
-VOLUME ["/app/models", "/app/input", "/app/output", "/home/comfy/.cache"]
+# Persist models, IO, and venv so installs only happen once
+VOLUME ["/app/models", "/app/input", "/app/output", "/comfyui", "/home/comfy/.local", "/home/comfy/.cache"]
 
-# Default port
 EXPOSE 8188
-
-# Simple healthcheck: HTTP root should respond once the server is up
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=5 \
-  CMD curl -fsS http://127.0.0.1:8188/ || exit 1
-
 USER comfy
 
-# Entry: pass extra args at docker run time to customize behavior
-# ...existing code...
-ENTRYPOINT ["python", "-u", "/app/main.py"]
+ENTRYPOINT ["/app/scripts/docker-entrypoint.sh"]
 CMD ["--listen", "0.0.0.0", "--port", "8188"]
-
-# Notes for GPU use on host (not enforced here):
-# - For NVIDIA GPUs, ensure the host has the NVIDIA driver and use the NVIDIA Container Toolkit.
-# - Run with:  docker run --gpus all ...
